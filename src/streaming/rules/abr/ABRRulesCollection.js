@@ -39,6 +39,7 @@ import CMABRule from './cmab/CMABRule.js';
 import BolaRule from './BolaRule';
 import L2ARule from './L2ARule.js';
 import LoLPRule from './lolp/LoLpRule.js';
+import AnjanRule from './anjan/AnjanRule.js';
 import FactoryMaker from '../../../core/FactoryMaker';
 import SwitchRequest from '../SwitchRequest';
 import Constants from '../../constants/Constants';
@@ -68,8 +69,15 @@ function ABRRulesCollection(config) {
 
         if (settings.get().streaming.abr.useDefaultABRRules) {
 
+            // The new policies replace only the bitrate rule, matching CMAB's selection path.
+            if ([Constants.ABR_STRATEGY_ANJAN_SIMPLE, Constants.ABR_STRATEGY_ANJAN_RL].includes(settings.get().streaming.abr.ABRStrategy)) {
+                qualitySwitchRules.push(AnjanRule(context).create({
+                    dashMetrics,
+                    mode: settings.get().streaming.abr.ABRStrategy === Constants.ABR_STRATEGY_ANJAN_RL ? 'rl' : 'simple'
+                }));
+            }
             // If L2A is used we only need this one rule
-            if (settings.get().streaming.abr.ABRStrategy === Constants.ABR_STRATEGY_L2A) {
+            else if (settings.get().streaming.abr.ABRStrategy === Constants.ABR_STRATEGY_L2A) {
                 qualitySwitchRules.push(
                     L2ARule(context).create({
                         dashMetrics: dashMetrics,

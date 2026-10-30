@@ -16,6 +16,12 @@
     <script src="../../../contrib/akamai/controlbar/ControlBar.js"></script>
     <script src="../../lib/sweetalert2/sweetalert2.all.min.js"></script>
     <script src="/pyodide/pyodide.js"></script>
+    <script src="/anjan/policy_core.js"></script>
+    <script>window.__anjanModelLoadStartedMs = performance.now();</script>
+    <script src="/anjan/sync_actor.js"></script>
+    <script src="/anjan/pilot_model.js"></script>
+    <script src="/anjan/pilot_setup.js"></script>
+    <script src="/anjan/build_identity.js"></script>
 
     <style>
         .btn {
@@ -214,6 +220,14 @@
                                         </label>
                                     </div>
                                     <h6 class="mt-4">ABR - Additional</h6>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="abr-general" value="abrAnjanSimple" id="abrAnjanSimple">
+                                        <label class="form-check-label" for="abrAnjanSimple">Anjan simple (live data)</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="abr-general" value="abrAnjanRL" id="abrAnjanRL">
+                                        <label class="form-check-label" for="abrAnjanRL">Anjan RL (pilot)</label>
+                                    </div>
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" id="abr-additional-insufficient"
                                             checked>
