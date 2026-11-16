@@ -36,6 +36,7 @@ import AbandonRequestsRule from './AbandonRequestsRule';
 import DroppedFramesRule from './DroppedFramesRule';
 import SwitchHistoryRule from './SwitchHistoryRule';
 import CMABRule from './cmab/CMABRule.js';
+import CMABImprovedRule from './cmab/CMABImprovedRule.js';
 import BolaRule from './BolaRule';
 import L2ARule from './L2ARule.js';
 import LoLPRule from './lolp/LoLpRule.js';
@@ -84,6 +85,9 @@ function ABRRulesCollection(config) {
                         settings: settings
                     })
                 );
+            }
+            else if (settings.get().streaming.abr.ABRStrategy === Constants.ABR_STRATEGY_CMAB_IMPROVED) {
+                qualitySwitchRules.push(CMABImprovedRule(context).create({dashMetrics, settings}));
             }
             // If CMAB is used we only need this one rule
             else if (settings.get().streaming.abr.ABRStrategy === Constants.ABR_STRATEGY_CMAB) {

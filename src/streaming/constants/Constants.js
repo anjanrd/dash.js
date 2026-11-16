@@ -128,6 +128,7 @@ class Constants {
          *  @static
          */
         this.ABR_STRATEGY_CMAB = 'abrCMAB';
+        this.ABR_STRATEGY_CMAB_IMPROVED = 'abrCMABImproved';
         this.ABR_STRATEGY_ANJAN_SIMPLE = 'abrAnjanSimple';
         this.ABR_STRATEGY_ANJAN_RL = 'abrAnjanRL';
 
