@@ -437,6 +437,18 @@ function CMABAbrController() {
             currentLiveLatency: currentLiveLatency,
         });
 
+        // BEGIN LEO PASSIVE AUDIT
+        window.__LEO_CMAB_TRACE = window.__LEO_CMAB_TRACE || [];
+        window.__LEO_CMAB_TRACE.push({
+            id: 'cmab-' + rounds, at_ms: Date.now(), slot: starlinkTimeslotCount,
+            slot_history_count: _selectedArmsArray.length,
+            forced: _selectedArmsArray.length <= cmabArms.length - 1,
+            action: selectedArm, bitrate_bps: bitrateList[selectedArm].bandwidth,
+            reward: reward_qoe, observation: {throughput_mbps: throughput,
+                playback_rate: playbackRate, network_latency_ms: networkLatency,
+                live_latency_s: currentLiveLatency}
+        });
+        // END LEO PASSIVE AUDIT
         rounds = rounds + 1;
 
         let toc = new Date();
