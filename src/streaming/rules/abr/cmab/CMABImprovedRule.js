@@ -69,6 +69,7 @@ function CMABImprovedRule(config) {
     let lastStallTime = null;
     let rebufferingEvents = new Map();
     let cmabAlpha = null;
+    let latestPlaybackController = null;
 
     const setup = async () => {
         CMABController = CMABImprovedController(context).create();
@@ -100,9 +101,21 @@ function CMABImprovedRule(config) {
             console.log('CMAB Rule Setup Done', new Date());
         });
 
+        eventBus.on(MediaPlayerEvents.FRAGMENT_LOADING_STARTED, onRequestStart, instance);
+        eventBus.on(MediaPlayerEvents.FRAGMENT_LOADING_COMPLETED, onRequestComplete, instance);
+        eventBus.on(MediaPlayerEvents.FRAGMENT_LOADING_ABANDONED, onRequestAbandoned, instance);
+        eventBus.on(MediaPlayerEvents.PLAYBACK_SEEKING, onSeek, instance);
         eventBus.on(MediaPlayerEvents.BUFFER_LOADED, onBufferLoaded, instance);
         eventBus.on(MediaPlayerEvents.BUFFER_EMPTY, onBufferEmpty, instance);
     }
+
+    function onRequestStart(e) { CMABController.onRequestStart(e.request); }
+    function onRequestComplete(e) {
+        CMABController.onRequestOutcome(e.request, e.error ? 'error' : 'complete',
+            latestPlaybackController ? latestPlaybackController.getCurrentLiveLatency() : 0);
+    }
+    function onRequestAbandoned(e) { CMABController.onRequestOutcome(e.request, 'abandoned', 0); }
+    function onSeek() { CMABController.onSeek(); }
 
     function onBufferEmpty(e) {
         if (e.mediaType === 'video' && pyodideInitDone === true) {
@@ -131,6 +144,7 @@ function CMABImprovedRule(config) {
             const streamInfo = rulesContext.getStreamInfo();
             const scheduleController = rulesContext.getScheduleController();
             const playbackController = scheduleController.getPlaybackController();
+            latestPlaybackController = playbackController;
             const isDynamic = streamInfo && streamInfo.manifestInfo ? streamInfo.manifestInfo.isDynamic : null;
             const mediaType = rulesContext.getMediaInfo().type;
             const bufferStateVO = dashMetrics.getCurrentBufferState(mediaType);
@@ -206,6 +220,10 @@ function CMABImprovedRule(config) {
     }
 
     function reset() {
+        eventBus.off(MediaPlayerEvents.FRAGMENT_LOADING_STARTED, onRequestStart, instance);
+        eventBus.off(MediaPlayerEvents.FRAGMENT_LOADING_COMPLETED, onRequestComplete, instance);
+        eventBus.off(MediaPlayerEvents.FRAGMENT_LOADING_ABANDONED, onRequestAbandoned, instance);
+        eventBus.off(MediaPlayerEvents.PLAYBACK_SEEKING, onSeek, instance);
         eventBus.off(MediaPlayerEvents.BUFFER_LOADED, onBufferLoaded, instance);
         eventBus.off(MediaPlayerEvents.BUFFER_EMPTY, onBufferEmpty, instance);
     }

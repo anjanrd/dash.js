@@ -35,6 +35,7 @@
  */
 
 import FactoryMaker from '../../../../core/FactoryMaker';
+import CMABFeedback from './CMABFeedback';
 
 const statServerUrl = 'http://stat-server:8000';
 
@@ -174,9 +175,14 @@ function CMABImprovedController() {
     let starlinkTimeslotCount = 0;
     let slotChoices = 0;
     const variant = new URLSearchParams(window.location.search).get('cmabVariant') || 'both';
-    if (!['reference', 'memory', 'startup', 'both'].includes(variant)) throw new Error('Unknown CMAB variant');
-    const retainHistory = ['memory', 'both'].includes(variant);
-    const safeStartup = ['startup', 'both'].includes(variant);
+    if (!['reference', 'memory', 'startup', 'both', 'delayed', 'outcome'].includes(variant)) throw new Error('Unknown CMAB variant');
+    const feedbackMode = ['delayed', 'outcome'].includes(variant);
+    const feedback = CMABFeedback(() => Date.now(), row => {
+        window.__LEO_FEEDBACK_TRACE = window.__LEO_FEEDBACK_TRACE || [];
+        window.__LEO_FEEDBACK_TRACE.push({...row, at_ms: Date.now()});
+    });
+    const retainHistory = ['memory', 'both', 'delayed', 'outcome'].includes(variant);
+    const safeStartup = ['startup', 'both', 'delayed', 'outcome'].includes(variant);
 
     let _rewardsArray = [];
     let _selectedArmsArray = [];
@@ -404,6 +410,13 @@ function CMABImprovedController() {
             _bitrateArray = _bitrateArray.slice(-30);
             _throughputDict.get(starlinkTimeslotCount).history = _throughputDict.get(starlinkTimeslotCount).history.slice(-30);
         }
+        if (feedbackMode) {
+            const rows = feedback.rows;
+            _selectedArmsArray = rows.map(r => r.action);
+            _rewardsArray = rows.map(r => r.reward);
+            _bitrateArray = rows.map(r => r.bitrate);
+            _throughputDict.get(starlinkTimeslotCount).history = rows.map(r => r.observation);
+        }
         let selectedArm = 0;
         let networkLatency = getLatestNetworkLatency();
 
@@ -425,7 +438,7 @@ function CMABImprovedController() {
         window.js_cmabAlpha = cmabAlpha;
 
         // just recovered from satellite handover
-        const forcedChoice = slotChoices < (safeStartup ? 1 : cmabArms.length - 1);
+        const forcedChoice = slotChoices < (safeStartup ? 1 : cmabArms.length - 1) || (feedbackMode && !feedback.rows.length);
         if (forcedChoice) {
             if (safeStartup) {
                 const safety = context.buffer_s < 1 ? 0.45 : 0.70;
@@ -439,16 +452,30 @@ function CMABImprovedController() {
             selectedArm = pyodide.runPython(_py_mabwiser_select_arm);
         }
 
-        _selectedArmsArray.push(selectedArm);
+        if (!feedbackMode) _selectedArmsArray.push(selectedArm);
 
         context.video_bitrate = bitrateList[selectedArm].bandwidth / 1000.0;
         context.resolution = `${bitrateList[selectedArm].width}x${bitrateList[selectedArm].height}`;
 
         let bitrateRatio = context.video_bitrate / maxBitrateKbps;
-        let reward_qoe = calculateReward(pyodide, context, currentLiveLatency, context.video_bitrate, bitrateRatio, rebufferingEvents);
+        let reward_qoe = feedbackMode ? null : calculateReward(pyodide, context, currentLiveLatency, context.video_bitrate, bitrateRatio, rebufferingEvents);
 
-        _bitrateArray.push(context.video_bitrate);
-        _rewardsArray.push(reward_qoe);
+        if (feedbackMode) {
+            const capturedContext = {...context};
+            const observation = {..._throughputDict.get(starlinkTimeslotCount).history.slice(-1)[0]};
+            const action = selectedArm, bitrate = context.video_bitrate;
+            feedback.offer({id:'cmab-'+rounds, action, bitrate, observation,
+                reward: (elapsed_s, observedLatency) => variant === 'delayed' ?
+                    calculateReward(pyodide, capturedContext, Math.max(0.1, observedLatency), bitrate,
+                        bitrateRatio, rebufferingEvents) :
+                    Math.log(bitrate/300)*context.seg_duration/2 -
+                    4*Math.max(0,elapsed_s-context.buffer_s) -
+                    0.3*Math.abs(Math.log(bitrate/Math.max(300,currentBitrateKbps))) -
+                    0.1*Math.max(0,observedLatency-context.target_latency)*elapsed_s});
+        } else {
+            _bitrateArray.push(context.video_bitrate);
+            _rewardsArray.push(reward_qoe);
+        }
 
         sendStats(statServerUrl+'/qoe/', 'qoe', {
             reward_qoe: reward_qoe,
@@ -480,6 +507,9 @@ function CMABImprovedController() {
 
     instance = {
         getCMABNextQuality,
+        onRequestStart: feedback.start,
+        onRequestOutcome: feedback.finish,
+        onSeek: feedback.seek,
     };
 
     return instance;
