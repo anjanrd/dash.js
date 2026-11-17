@@ -3,12 +3,14 @@ import FactoryMaker from '../../../../core/FactoryMaker';
 import EventBus from '../../../../core/EventBus';
 import MediaPlayerEvents from '../../../MediaPlayerEvents';
 import SwitchRequest from '../../SwitchRequest';
+import acquireNetworkObservations from '../NetworkObservations';
 
 function AnjanRule(config) {
     const context = this.context;
     const eventBus = EventBus(context).getInstance();
     let instance, cached = null, epoch = 0, since = 0, sequence = 0;
     const metrics = config.dashMetrics;
+    const releaseObservations = acquireNetworkObservations();
 
     function emit(event) {
         if (window.app && window.app.addEvent) {
@@ -60,7 +62,7 @@ function AnjanRule(config) {
             answer.quality = cached.quality;
             answer.reason = {policy: config.mode, decision_id: cached.id, cached: true};
             window.__anjanCallbackDurations = window.__anjanCallbackDurations || [];
-            window.__anjanCallbackDurations.push({cached: true, ms: performance.now() - started});
+            window.__anjanCallbackDurations.push({at_ms:Date.now(),cached: true, ms: performance.now() - started});
             return answer;
         }
         const playback = rulesContext.getScheduleController().getPlaybackController();
@@ -76,6 +78,12 @@ function AnjanRule(config) {
                     age_s: Math.max(0, (now - +r._tfinish) / 1000), bytes,
                     url: r.url, finished_ms: +r._tfinish};
             }), ladder};
+        const health=window.LEO_PROBE || {};
+        const probeRows=(window.LEO_PROBE_HISTORY || []).filter(r=>Number.isFinite(r.probe_at_s) && r.probe_at_s<=now/1000).slice(-8);
+        if (health.error) probeRows.push({probe_at_s:now/1000,ok:false,rtt_ms:0});
+        obs.probes=probeRows.slice(-8).map(r=>({rtt_ms:r.rtt_ms,ok:r.ok===true && Number.isFinite(r.rtt_ms),age_s:Math.max(0,now/1000-r.probe_at_s)}));
+        obs.probe_success_age_s=Number.isFinite(health.success_at_s)?Math.max(0,now/1000-health.success_at_s):99;
+        obs.probe_valid=health.valid===true && health.ok===true && obs.probe_success_age_s<3 && Number.isFinite(health.rtt_ms);
         let result, input = null;
         const runtime = window.LEO_ABR;
         try {
@@ -86,7 +94,7 @@ function AnjanRule(config) {
                     ladder.some((r, i) => r.bandwidth !== runtime.actionBitrates[i])) {
                     throw new Error('model-ladder-mismatch');
                 }
-                input = Array.from(runtime.core.features(obs));
+                input = Array.from((runtime.features || runtime.core.features)(obs));
                 result = runtime.predict(input);
                 if (!Number.isInteger(result.action) || result.action < 0 || result.action >= ladder.length) {
                     throw new Error('invalid-model-action');
@@ -113,11 +121,12 @@ function AnjanRule(config) {
         rulesContext.getScheduleController().setTimeToLoadDelay(0);
         log.duration_ms = performance.now() - started;
         window.__anjanCallbackDurations = window.__anjanCallbackDurations || [];
-        window.__anjanCallbackDurations.push({cached: false, ms: log.duration_ms});
+        window.__anjanCallbackDurations.push({at_ms:Date.now(),cached: false, ms: log.duration_ms});
         return answer;
     }
 
     function reset() {
+        releaseObservations();
         eventBus.off(MediaPlayerEvents.PLAYBACK_SEEKING, onSeek, instance);
         eventBus.off(MediaPlayerEvents.FRAGMENT_LOADING_STARTED, onRequest, instance);
         eventBus.off(MediaPlayerEvents.QUALITY_CHANGE_RENDERED, onRendered, instance);
