@@ -158,6 +158,16 @@ function CMABImprovedController() {
     mab.predict(test)
     `;
 
+    const _py_physical_select_arm = `
+    import numpy as np
+    from mabwiser.mab import MAB, LearningPolicy
+    from js import js_cmabArms, js_rewards, js_selected_arms, js_physical_contexts, js_cmabAlpha, js_cmabSeed
+    contexts = np.array(js_physical_contexts.to_py(), dtype=float)
+    mab = MAB(arms=js_cmabArms.to_py(), learning_policy=LearningPolicy.LinTS(alpha=js_cmabAlpha), seed=int(js_cmabSeed))
+    mab.fit(decisions=js_selected_arms.to_py(), rewards=js_rewards.to_py(), contexts=contexts[:-1])
+    mab.predict(contexts[-1:])
+    `;
+
     let _py_itu_p1203_calculate_o46 = `
     import json
     from itu_p1203 import P1203Standalone
@@ -175,14 +185,18 @@ function CMABImprovedController() {
     let starlinkTimeslotCount = 0;
     let slotChoices = 0;
     const variant = new URLSearchParams(window.location.search).get('cmabVariant') || 'both';
-    if (!['reference', 'memory', 'startup', 'both', 'delayed', 'outcome'].includes(variant)) throw new Error('Unknown CMAB variant');
-    const feedbackMode = ['delayed', 'outcome'].includes(variant);
+    if (!['reference', 'memory', 'startup', 'both', 'delayed', 'outcome', 'scaled', 'buffer', 'context', 'seeded', 'guard', 'guard_only'].includes(variant)) throw new Error('Unknown CMAB variant');
+    const feedbackMode = ['delayed', 'outcome', 'scaled', 'buffer', 'context', 'seeded', 'guard', 'guard_only'].includes(variant);
+    const physicalFeatures = ['scaled','buffer','context','seeded','guard','guard_only'].includes(variant);
+    const includeBuffer = physicalFeatures && variant !== 'scaled';
+    const includeProbe = ['context','seeded','guard','guard_only'].includes(variant);
+    const actionGuard = ['guard','guard_only'].includes(variant);
     const feedback = CMABFeedback(() => Date.now(), row => {
         window.__LEO_FEEDBACK_TRACE = window.__LEO_FEEDBACK_TRACE || [];
         window.__LEO_FEEDBACK_TRACE.push({...row, at_ms: Date.now()});
     });
-    const retainHistory = ['memory', 'both', 'delayed', 'outcome'].includes(variant);
-    const safeStartup = ['startup', 'both', 'delayed', 'outcome'].includes(variant);
+    const retainHistory = ['memory', 'both', 'delayed', 'outcome', 'scaled', 'buffer', 'context', 'seeded', 'guard', 'guard_only'].includes(variant);
+    const safeStartup = ['startup', 'both', 'delayed', 'outcome', 'scaled', 'buffer', 'context', 'seeded', 'guard', 'guard_only'].includes(variant);
 
     let _rewardsArray = [];
     let _selectedArmsArray = [];
@@ -375,6 +389,7 @@ function CMABImprovedController() {
         currentBitrateKbps, maxBitrateKbps, currentLiveLatency, playbackRate, throughput,
         rebufferingEvents, cmabAlpha) {
         let tic = new Date();
+        const decisionStarted = performance.now();
 
         console.log('\n\ngetCMABNextQuality', tic);
         console.log(`Throughput ${throughput} kbps, playbackSpeed ${playbackRate}, currentLatency ${currentLiveLatency}, currentBitrate ${currentBitrateKbps}, maxBitrate ${maxBitrateKbps}, currentQualityLevel ${currentQualityLevel}`);
@@ -419,13 +434,21 @@ function CMABImprovedController() {
         }
         let selectedArm = 0;
         let networkLatency = getLatestNetworkLatency();
+        const probe = window.LEO_PROBE || {};
+        const probeAge = Number.isFinite(probe.success_at_s) ? Math.max(0,Date.now()/1000-probe.success_at_s) : 3;
+        const probeValid = !!probe.valid && probeAge < 3 && Number.isFinite(probe.rtt_ms);
+        const recentProbes = (window.LEO_PROBE_HISTORY || []).filter(p => p.valid && Number.isFinite(p.rtt_ms));
+        const rttTrend = recentProbes.length>1 ? (recentProbes[recentProbes.length-1].rtt_ms-recentProbes[0].rtt_ms)/200 : 0;
+        if (includeProbe) networkLatency = probeValid ? probe.rtt_ms : 0;
 
         _throughputDict.get(starlinkTimeslotCount).history.push({
             tic: tic,
             throughput: throughput,
             network_latency: networkLatency,
             live_latency: currentLiveLatency,
-            playback_rate: playbackRate
+            playback_rate: playbackRate,
+            buffer_s: context.buffer_s, probe_valid: probeValid ? 1 : 0,
+            probe_age_s: probeAge, rtt_trend: rttTrend
         });
         console.log('network latency:', networkLatency);
 
@@ -436,6 +459,15 @@ function CMABImprovedController() {
         window.js_history = _throughputDict.get(starlinkTimeslotCount).history;
         window.js_rebuffer_events = rebufferingEvents;
         window.js_cmabAlpha = cmabAlpha;
+        const history = _throughputDict.get(starlinkTimeslotCount).history;
+        const clip = (v,lo,hi) => Math.max(lo,Math.min(hi,Number.isFinite(Number(v)) ? Number(v) : lo));
+        window.js_physical_contexts = history.map(r => {
+            const x=[1,clip(r.throughput/10,0,3),clip((r.playback_rate-1)/0.17,-1,1),clip(Number(r.network_latency)/200,0,5)];
+            if (includeBuffer) x.push(clip(r.buffer_s/3,0,4),clip(r.live_latency/3,0,8));
+            if (includeProbe) x.push(r.probe_valid,clip(r.probe_age_s/3,0,1),clip(r.rtt_trend,-1,1));
+            return x;
+        });
+        window.js_cmabSeed = variant === 'seeded' ? 123456+rounds : 123456;
 
         // just recovered from satellite handover
         const forcedChoice = slotChoices < (safeStartup ? 1 : cmabArms.length - 1) || (feedbackMode && !feedback.rows.length);
@@ -449,9 +481,18 @@ function CMABImprovedController() {
                 selectedArm = cmabArms.length - 1;
             }
         } else {
-            selectedArm = pyodide.runPython(_py_mabwiser_select_arm);
+            selectedArm = variant === 'guard_only' ? 0 : pyodide.runPython(physicalFeatures ? _py_physical_select_arm : _py_mabwiser_select_arm);
         }
 
+        const proposal = selectedArm;
+        let guardMaximum = cmabArms.length-1;
+        if (actionGuard) {
+            const safety = context.buffer_s < 1 || currentLiveLatency > context.target_latency+2 || !probeValid ? 0.55 : 0.85;
+            const safeBps = throughput*1e6*safety;
+            guardMaximum = 0;
+            bitrateList.forEach((r,i) => {if (r.bandwidth <= safeBps) guardMaximum=i;});
+            selectedArm = variant === 'guard_only' ? guardMaximum : Math.min(selectedArm,guardMaximum);
+        }
         if (!feedbackMode) _selectedArmsArray.push(selectedArm);
 
         context.video_bitrate = bitrateList[selectedArm].bandwidth / 1000.0;
@@ -492,9 +533,14 @@ function CMABImprovedController() {
             slot_history_count: _selectedArmsArray.length,
             forced: forcedChoice, variant, slot_choice_number: slotChoices + 1,
             action: selectedArm, bitrate_bps: bitrateList[selectedArm].bandwidth,
-            reward: reward_qoe, observation: {throughput_mbps: throughput,
+            reward: reward_qoe, proposal, guard_maximum:guardMaximum, guard_override:variant!=='guard_only' && proposal!==selectedArm,
+            selection_source:variant==='guard_only' ? 'guard-only' : (forcedChoice ? 'startup' : 'LinTS'),
+            duration_ms:performance.now()-decisionStarted,
+            model_input:physicalFeatures ? window.js_physical_contexts[window.js_physical_contexts.length-1] : null,
+            observation: {throughput_mbps: throughput,
                 playback_rate: playbackRate, network_latency_ms: networkLatency,
-                live_latency_s: currentLiveLatency}
+                live_latency_s: currentLiveLatency, buffer_s:context.buffer_s,
+                probe_valid:probeValid, probe_age_s:probeAge, rtt_trend:rttTrend}
         });
         // END LEO PASSIVE AUDIT
         slotChoices += 1;

@@ -42,7 +42,7 @@ import MediaPlayerEvents from '../../../MediaPlayerEvents';
 import EventBus from '../../../../core/EventBus';
 import Settings from '../../../../core/Settings';
 
-const { loadPyodide } = require('pyodide');
+import prepareCMABRuntime from './CMABRuntime';
 
 function CMABRule(config) {
     config = config || {};
@@ -76,24 +76,7 @@ function CMABRule(config) {
         cmabAlpha = player_settings.get().streaming.abr.cmab.alpha;
         console.log('!!!!!!cmab alpha:', cmabAlpha);
 
-        async function init_pyodide() {
-            console.log('Loading Pyodide...');
-            let pyodide = await loadPyodide({indexURL: 'http://pyodide/pyodide/'});
-            let requirements = [
-                'pandas',
-                'matplotlib',
-                'numpy',
-                'Pillow',
-                'scikit-learn',
-                'scipy',
-                'http://pyodide/pyodide/mabwiser-2.7.0-py3-none-any.whl',
-                'http://pyodide/pyodide/itu_p1203-1.9.5-py3-none-any.whl',
-            ]
-            await pyodide.loadPackage(requirements);
-            return pyodide;
-        }
-
-        init_pyodide().then((pyodide_context) => {
+        prepareCMABRuntime().then((pyodide_context) => {
             pyodide = pyodide_context;
             pyodide.runPython(`from mabwiser.mab import MAB`);
             pyodideInitDone = true;
@@ -116,10 +99,13 @@ function CMABRule(config) {
         if (e.mediaType === 'video' && pyodideInitDone === true) {
             let tic = new Date();
             console.log('===CMAB Buffer Loaded:', e, tic, lastStallTime);
-            if (lastStallTime != null) {
+            if (lastStallTime != null && rebufferingEvents.has(currentBitrateKbps)) {
                 let duration = (tic - lastStallTime) / 1000.0;
                 rebufferingEvents.get(currentBitrateKbps).push(duration);
                 console.log('++++rebuffering duration', rebufferingEvents);
+            } else {
+                // With prewarmed dependencies, initial buffer events can precede any quality decision.
+                lastStallTime = null;
             }
         }
     }
