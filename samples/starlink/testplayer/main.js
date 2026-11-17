@@ -178,6 +178,11 @@ App.prototype._load = function () {
         });
     }
 
+    // Explicit emulator-only option: all containers share one host clock.
+    // Keep external UTC synchronization as the default for real remote clients.
+    if (urlParams.get('hostClock') === '1') {
+        this.player.updateSettings({streaming:{utcSynchronization:{enabled:false}}});
+    }
     this.player.initialize(this.video, url, true);
     this.controlbar = new ControlBar(this.player);
     this.controlbar.initialize();
